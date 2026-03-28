@@ -569,12 +569,57 @@ h1{font-size:26px;font-weight:700;margin-bottom:4px;background:linear-gradient(1
 </nav>
 
 <script>
-// ══ STORAGE ══
-const S = {
-  get: (k, d) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : d; } catch { return d; } },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+// ══ SUPABASE ══
+const SUPA_URL = 'https://ykjhfahtwsakustwelgs.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlramhmYWh0d3Nha3VzdHdlbGdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ2OTAwMzUsImV4cCI6MjA5MDI2NjAzNX0.KCt1Dz9bXU-HcPkLqyrCpnJ1D6YAVfy1yAFrnQCsGLo';
+
+const db = {
+  async get(table, filters = {}) {
+    let url = `${SUPA_URL}/rest/v1/${table}?select=*`;
+    Object.entries(filters).forEach(([k, v]) => { url += `&${k}=eq.${v}`; });
+    url += '&order=erstellt_am.asc';
+    const r = await fetch(url, { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async insert(table, data) {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(data)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async upsert(table, data, onConflict) {
+    let url = `${SUPA_URL}/rest/v1/${table}`;
+    if (onConflict) url += `?on_conflict=${onConflict}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(data)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async update(table, id, data) {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: 'PATCH',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+      body: JSON.stringify(data)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async delete(table, id) {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
+    });
+    if (!r.ok) throw new Error(await r.text());
+  }
 };
-const K = { clients:'gt_cl', data:'gt_data', ci:'gt_ci', meals:'gt_meals', train:'gt_train' };
+
 const TODAY = new Date().toISOString().split('T')[0];
 const COLORS = ['#b57bee','#e879a0','#2dd4a0','#fbbf24','#60a5fa','#f87171','#a3e635','#fb923c'];
 const MF = ['po','bauch','taille','boobies','os-re','os-li','wade-re','wade-li','arm-re','arm-li'];
@@ -587,6 +632,9 @@ let ciStep = 0, ciData = {};
 let charts = {};
 let delFn = null;
 
+// Local cache to avoid re-fetching
+let cache = { entries: null, ci: null, meals: null, train: null, exercises: null };
+
 // ══ HELPERS ══
 const fd = s => { if (!s) return '–'; const d = new Date(s); return d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'2-digit' }); };
 const ff = d => d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
@@ -594,77 +642,74 @@ const fs = d => d.toLocaleDateString('de-DE', { month:'short', year:'numeric' })
 const addW = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n * 7); return x; };
 const r1 = v => Math.round(v * 10) / 10;
 
+function showLoading(msg) { document.getElementById('toast').textContent = msg || 'Lädt…'; document.getElementById('toast').className = ''; document.getElementById('toast').classList.add('on'); }
+function hideLoading() { document.getElementById('toast').classList.remove('on'); }
+
 function toast(msg, err) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = err ? 'err' : '';
+  t.textContent = msg; t.className = err ? 'err' : '';
   t.classList.add('on');
   setTimeout(() => t.classList.remove('on'), 2500);
 }
 
 function openModal(id) { document.getElementById(id).classList.add('on'); }
 function closeModal(id) { document.getElementById(id).classList.remove('on'); }
-
-// Close modal when clicking background
 document.querySelectorAll('.modal-bg').forEach(bg => {
   bg.addEventListener('click', e => { if (e.target === bg) bg.classList.remove('on'); });
 });
 
-// ══ CLIENT HELPERS ══
-const getClients = () => S.get(K.clients, []);
-const getEntries = () => CLIENT ? (S.get(K.data, {})[CLIENT.id] || []).sort((a,b) => a.datum.localeCompare(b.datum)) : [];
-const getCI = () => CLIENT ? S.get(K.ci, {})[CLIENT.id] || {} : {};
-const getMeals = () => CLIENT ? S.get(K.meals, {})[CLIENT.id] || [] : [];
-const getTrain = () => CLIENT ? S.get(K.train, {})[CLIENT.id] || { exercises: [], planText: '' } : { exercises: [], planText: '' };
-
 // ══ HOME ══
-function renderHome() {
-  const cs = getClients();
-  const el = document.getElementById('client-list');
-  if (!cs.length) {
-    el.innerHTML = '<div class="empty">Noch keine Profile — leg das erste an!</div>';
-    return;
-  }
-  el.innerHTML = cs.map(c => `
-    <div class="client-card" onclick="selectClient('${c.id}')">
-      <div class="avatar" style="background:${c.color}">${c.name[0].toUpperCase()}</div>
-      <div>
-        <div class="client-name">${c.name}</div>
-        <div class="client-meta">Ziel: ${c.ziel || '–'} kg${c.start ? ' · Start: ' + c.start + ' kg' : ''}</div>
-      </div>
-      <svg style="margin-left:auto;flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-    </div>`).join('');
+async function renderHome() {
+  showLoading('Lade Kunden…');
+  try {
+    const cs = await db.get('kunden');
+    hideLoading();
+    const el = document.getElementById('client-list');
+    if (!cs.length) { el.innerHTML = '<div class="empty">Noch keine Profile — leg das erste an!</div>'; return; }
+    el.innerHTML = cs.map(c => `
+      <div class="client-card" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})">
+        <div class="avatar" style="background:${c.farbe||'#b57bee'}">${c.name[0].toUpperCase()}</div>
+        <div>
+          <div class="client-name">${c.name}</div>
+          <div class="client-meta">Ziel: ${c.ziel_gewicht||'–'} kg${c.start_gewicht?' · Start: '+c.start_gewicht+' kg':''}</div>
+        </div>
+        <svg style="margin-left:auto;flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>`).join('');
+  } catch(e) { hideLoading(); toast('Verbindungsfehler: ' + e.message, true); }
 }
 
-function doCreateClient() {
+async function doCreateClient() {
   const name = document.getElementById('nc-name').value.trim();
   if (!name) { toast('Bitte Namen eingeben', true); return; }
-  const cs = getClients();
-  if (cs.find(c => c.name.toLowerCase() === name.toLowerCase())) { toast('Name bereits vergeben', true); return; }
   const ziel = parseFloat(document.getElementById('nc-ziel').value) || null;
   const start = parseFloat(document.getElementById('nc-start').value) || null;
-  const c = { id: 'c' + Date.now(), name, ziel, start, color: COLORS[cs.length % COLORS.length] };
-  cs.push(c);
-  S.set(K.clients, cs);
-  closeModal('m-addclient');
-  ['nc-name','nc-ziel','nc-start'].forEach(id => document.getElementById(id).value = '');
-  toast(name + ' angelegt!');
-  selectClient(c.id);
+  showLoading('Wird angelegt…');
+  try {
+    const existing = await db.get('kunden');
+    const farbe = COLORS[existing.length % COLORS.length];
+    await db.insert('kunden', { name, ziel_gewicht: ziel, start_gewicht: start, farbe });
+    hideLoading();
+    closeModal('m-addclient');
+    ['nc-name','nc-ziel','nc-start'].forEach(id => document.getElementById(id).value = '');
+    toast(name + ' angelegt!');
+    await renderHome();
+    // Auto-select newly created client
+    const cs = await db.get('kunden');
+    const newC = cs.find(c => c.name === name);
+    if (newC) selectClient(newC);
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
 }
 
-function selectClient(id) {
-  const cs = getClients();
-  CLIENT = cs.find(c => c.id === id) || null;
-  if (!CLIENT) return;
+function selectClient(c) {
+  CLIENT = typeof c === 'string' ? JSON.parse(c) : c;
+  cache = { entries: null, ci: null, meals: null, train: null, exercises: null };
   document.getElementById('pg-home').classList.remove('on');
   document.getElementById('main-nav').style.display = 'flex';
   goTab('dash', document.getElementById('nb-dash'));
-  const ci = getCI();
-  if (!ci[TODAY]) setTimeout(() => startCheckin(), 800);
 }
 
 function goHome() {
-  CLIENT = null;
+  CLIENT = null; cache = {};
   document.getElementById('main-nav').style.display = 'none';
   document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
   document.getElementById('pg-home').classList.add('on');
@@ -687,36 +732,51 @@ function goTab(tab, btn) {
 }
 
 // ══ DASHBOARD ══
-function renderDash() {
+async function renderDash() {
   if (!CLIENT) return;
-  const es = getEntries(), last = es[es.length-1], first = es[0], c = CLIENT;
+  showLoading('Lädt…');
+  try {
+    const [entries, ciAll] = await Promise.all([
+      db.get('messungen', { kunde_id: CLIENT.id }),
+      db.get('checkins', { kunde_id: CLIENT.id })
+    ]);
+    cache.entries = entries.sort((a,b) => a.datum.localeCompare(b.datum));
+    cache.ci = {};
+    ciAll.forEach(c => { cache.ci[c.datum] = c; });
+    hideLoading();
+    _renderDashUI();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
+}
+
+function _renderDashUI() {
+  const es = cache.entries || [], last = es[es.length-1], first = es[0], c = CLIENT;
   document.getElementById('dash-name').textContent = c.name;
   document.getElementById('dash-sub').textContent = last ? 'Stand ' + fd(last.datum) : 'Noch keine Einträge';
 
   if (last?.gewicht) {
-    document.getElementById('kpi-w').textContent = last.gewicht.toFixed(1) + ' kg';
+    document.getElementById('kpi-w').textContent = parseFloat(last.gewicht).toFixed(1) + ' kg';
     if (first?.gewicht && first.datum !== last.datum) {
-      const d = (last.gewicht - first.gewicht).toFixed(1);
+      const d = (parseFloat(last.gewicht) - parseFloat(first.gewicht)).toFixed(1);
       document.getElementById('kpi-ws').innerHTML = `<span class="${parseFloat(d)<=0?'good':'bad'}">${parseFloat(d)>0?'+':''}${d} kg seit Start</span>`;
     }
   } else { document.getElementById('kpi-w').textContent = '– kg'; document.getElementById('kpi-ws').textContent = 'noch kein Eintrag'; }
 
-  if (c.ziel && last?.gewicht) {
-    const rem = Math.max(0, last.gewicht - c.ziel).toFixed(1);
+  if (c.ziel_gewicht && last?.gewicht) {
+    const rem = Math.max(0, parseFloat(last.gewicht) - c.ziel_gewicht).toFixed(1);
     document.getElementById('kpi-r').textContent = rem + ' kg';
-    document.getElementById('kpi-rs').textContent = 'Ziel: ' + c.ziel + ' kg';
-    if (c.start) {
-      const pct = Math.max(0, Math.min(100, ((c.start - last.gewicht) / (c.start - c.ziel)) * 100));
+    document.getElementById('kpi-rs').textContent = 'Ziel: ' + c.ziel_gewicht + ' kg';
+    if (c.start_gewicht) {
+      const pct = Math.max(0, Math.min(100, ((c.start_gewicht - parseFloat(last.gewicht)) / (c.start_gewicht - c.ziel_gewicht)) * 100));
       document.getElementById('prog-card').style.display = '';
-      document.getElementById('prog-label').textContent = 'Fortschritt (' + c.start + ' → ' + c.ziel + ' kg)';
+      document.getElementById('prog-label').textContent = 'Fortschritt (' + c.start_gewicht + ' → ' + c.ziel_gewicht + ' kg)';
       document.getElementById('prog-fill').style.width = pct.toFixed(1) + '%';
       document.getElementById('prog-pct').textContent = pct.toFixed(1) + '%';
-      document.getElementById('prog-s').textContent = c.start + ' kg';
-      document.getElementById('prog-e').textContent = c.ziel + ' kg';
+      document.getElementById('prog-s').textContent = c.start_gewicht + ' kg';
+      document.getElementById('prog-e').textContent = c.ziel_gewicht + ' kg';
     }
   } else { document.getElementById('kpi-r').textContent = '–'; document.getElementById('kpi-rs').textContent = 'Kein Ziel gesetzt'; document.getElementById('prog-card').style.display = 'none'; }
 
-  const ci = getCI(), streak = calcStreak();
+  const ci = cache.ci || {}, streak = _calcStreak();
   document.getElementById('dash-streak').innerHTML = `<div class="streak"><div class="streak-n">${streak}</div><div><div class="streak-l">Tage Streak</div><div class="streak-s">${Object.keys(ci).length} Check-ins gesamt</div></div><div style="font-size:28px;margin-left:auto">${streak>=7?'🔥':streak>=3?'⚡':'✨'}</div></div>`;
 
   const tci = ci[TODAY];
@@ -726,123 +786,116 @@ function renderDash() {
 
   const g = document.getElementById('dash-masz');
   if (last) {
-    const items = MF.map(f => { if (last[f]===undefined) return ''; const fv=first?.[f], delta=fv!==undefined?(last[f]-fv).toFixed(1):null; return `<div class="masz-item"><div class="masz-name">${MFLBL[f]}</div><div class="masz-val">${last[f]}</div>${delta!==null?`<div class="masz-delta ${parseFloat(delta)<=0?'good':'bad'}">${parseFloat(delta)>0?'+':''}${delta} cm</div>`:''}</div>`; }).join('');
+    const dbToField = { 'os-re':'os_re','os-li':'os_li','wade-re':'wade_re','wade-li':'wade_li','arm-re':'arm_re','arm-li':'arm_li' };
+    const getVal = (entry, field) => { const dbf = dbToField[field] || field; return entry[dbf]; };
+    const items = MF.map(f => { const v=getVal(last,f); if(!v) return ''; const fv=first?getVal(first,f):null, delta=fv?(v-fv).toFixed(1):null; return `<div class="masz-item"><div class="masz-name">${MFLBL[f]}</div><div class="masz-val">${parseFloat(v).toFixed(1)}</div>${delta!==null?`<div class="masz-delta ${parseFloat(delta)<=0?'good':'bad'}">${parseFloat(delta)>0?'+':''}${delta} cm</div>`:''}</div>`; }).join('');
     g.innerHTML = items || '<div class="empty">Noch keine Maße</div>';
   } else g.innerHTML = '<div class="empty">Noch keine Maße eingetragen</div>';
 
   const wa = es.filter(e => e.gewicht);
   if (charts.dash) charts.dash.destroy();
   if (wa.length && window.Chart) {
-    charts.dash = new Chart(document.getElementById('chart-dash'), { type:'line', data:{ labels:wa.map(e=>fd(e.datum)), datasets:[{ data:wa.map(e=>e.gewicht), borderColor:CLIENT.color, backgroundColor:CLIENT.color+'18', borderWidth:2.5, pointRadius:5, pointBackgroundColor:CLIENT.color, tension:0.4, fill:true }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+' kg'},grid:{color:'rgba(255,255,255,.04)'}} } } });
+    charts.dash = new Chart(document.getElementById('chart-dash'), { type:'line', data:{ labels:wa.map(e=>fd(e.datum)), datasets:[{ data:wa.map(e=>parseFloat(e.gewicht)), borderColor:CLIENT.farbe||'#b57bee', backgroundColor:(CLIENT.farbe||'#b57bee')+'18', borderWidth:2.5, pointRadius:5, pointBackgroundColor:CLIENT.farbe||'#b57bee', tension:0.4, fill:true }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+' kg'},grid:{color:'rgba(255,255,255,.04)'}} } } });
   }
 }
 
 // ══ ENTRY ══
-function doSaveEntry() {
+async function doSaveEntry() {
   if (!CLIENT) return;
   const datum = document.getElementById('e-datum').value;
   if (!datum) { toast('Datum auswählen', true); return; }
   const gew = parseFloat(document.getElementById('e-gew').value.replace(',','.'));
-  const entry = { datum };
+  const dbToField = { 'os-re':'os_re','os-li':'os_li','wade-re':'wade_re','wade-li':'wade_li','arm-re':'arm_re','arm-li':'arm_li' };
+  const entry = { kunde_id: CLIENT.id, datum };
   if (!isNaN(gew)) entry.gewicht = r1(gew);
-  MF.forEach(f => { const v = parseFloat(document.getElementById('e-' + f).value.replace(',','.')); if (!isNaN(v)) entry[f] = r1(v); });
-  if (!entry.gewicht && MF.every(f => entry[f] === undefined)) { toast('Mindestens einen Wert eingeben', true); return; }
-  const all = S.get(K.data, {});
-  const es = all[CLIENT.id] || [];
-  const i = es.findIndex(e => e.datum === datum);
-  if (i >= 0) es[i] = { ...es[i], ...entry }; else es.push(entry);
-  all[CLIENT.id] = es;
-  S.set(K.data, all);
-  toast('Gespeichert!');
-  document.getElementById('e-gew').value = '';
-  MF.forEach(f => { document.getElementById('e-' + f).value = ''; });
+  MF.forEach(f => { const v = parseFloat(document.getElementById('e-' + f).value.replace(',','.')); if (!isNaN(v)) entry[dbToField[f]||f] = r1(v); });
+  if (!entry.gewicht && MF.every(f => !entry[dbToField[f]||f])) { toast('Mindestens einen Wert eingeben', true); return; }
+  showLoading('Speichert…');
+  try {
+    await db.upsert('messungen', entry, 'kunde_id,datum');
+    hideLoading(); toast('Gespeichert!');
+    document.getElementById('e-gew').value = '';
+    MF.forEach(f => { document.getElementById('e-' + f).value = ''; });
+    cache.entries = null;
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
 }
 
 // ══ VERLAUF ══
-function renderVerlauf(field) {
+async function renderVerlauf(field) {
   curVField = field;
   if (!CLIENT) return;
-  const es = getEntries().filter(e => e[field] !== undefined);
-  const unit = field === 'gewicht' ? ' kg' : ' cm';
-
-  // Tabs
-  const fields = ['gewicht', 'po', 'bauch', 'taille', 'boobies', 'os-re', 'arm-re', 'wade-re'];
+  const fields = ['gewicht','po','bauch','taille','boobies','os-re','arm-re','wade-re'];
   document.getElementById('vtabs').innerHTML = fields.map(f => `<button class="tab-btn ${f===field?'on':''}" onclick="renderVerlauf('${f}')">${MFLBL[f]}</button>`).join('');
+
+  if (!cache.entries) {
+    showLoading('Lädt…');
+    cache.entries = (await db.get('messungen', { kunde_id: CLIENT.id })).sort((a,b) => a.datum.localeCompare(b.datum));
+    hideLoading();
+  }
+  const dbToField = { 'os-re':'os_re','os-li':'os_li','wade-re':'wade_re','wade-li':'wade_li','arm-re':'arm_re','arm-li':'arm_li' };
+  const dbField = dbToField[field] || field;
+  const es = cache.entries.filter(e => e[dbField] !== null && e[dbField] !== undefined);
+  const unit = field === 'gewicht' ? ' kg' : ' cm';
 
   document.getElementById('vcount').textContent = es.length + ' Einträge';
   if (charts.v) charts.v.destroy();
   if (es.length && window.Chart) {
-    charts.v = new Chart(document.getElementById('chart-v'), { type:'line', data:{ labels:es.map(e=>fd(e.datum)), datasets:[{ data:es.map(e=>e[field]), borderColor:CLIENT.color, backgroundColor:CLIENT.color+'18', borderWidth:2.5, pointRadius:5, pointBackgroundColor:CLIENT.color, tension:0.35, fill:true }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+unit},grid:{color:'rgba(255,255,255,.04)'}} } } });
+    charts.v = new Chart(document.getElementById('chart-v'), { type:'line', data:{ labels:es.map(e=>fd(e.datum)), datasets:[{ data:es.map(e=>parseFloat(e[dbField])), borderColor:CLIENT.farbe||'#b57bee', backgroundColor:(CLIENT.farbe||'#b57bee')+'18', borderWidth:2.5, pointRadius:5, pointBackgroundColor:CLIENT.farbe||'#b57bee', tension:0.35, fill:true }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+unit},grid:{color:'rgba(255,255,255,.04)'}} } } });
   }
   const list = document.getElementById('vlist');
   if (!es.length) { list.innerHTML = '<div class="empty">Noch keine Einträge</div>'; return; }
   list.innerHTML = [...es].reverse().map((e, i, a) => {
-    const val = e[field], prev = a[i+1]?.[field], delta = prev !== undefined ? (val - prev).toFixed(1) : null, good = delta !== null && parseFloat(delta) <= 0;
+    const val = parseFloat(e[dbField]), prev = a[i+1]?.[dbField] ? parseFloat(a[i+1][dbField]) : null;
+    const delta = prev !== null ? (val - prev).toFixed(1) : null, good = delta !== null && parseFloat(delta) <= 0;
     return `<div class="hist-item">
       <div><div class="hist-date">${fd(e.datum)}</div>${delta!==null?`<div class="hist-delta ${good?'good':'bad'}">${parseFloat(delta)>0?'+':''}${delta}${unit}</div>`:'<div class="hist-delta neu">Erster Eintrag</div>'}</div>
       <div style="display:flex;align-items:center;gap:8px">
-        <div class="hist-val">${val}${unit}</div>
-        <button class="del-btn" onclick="confirmDelete('Eintrag vom ${fd(e.datum)} löschen?', ()=>deleteEntry('${e.datum}'))">×</button>
+        <div class="hist-val">${val.toFixed(1)}${unit}</div>
+        <button class="del-btn" onclick="confirmDelete('Eintrag vom ${fd(e.datum)} löschen?', ()=>deleteEntry('${e.id}'))">×</button>
       </div>
     </div>`;
   }).join('');
 }
 
-function deleteEntry(datum) {
-  const all = S.get(K.data, {});
-  all[CLIENT.id] = (all[CLIENT.id] || []).filter(e => e.datum !== datum);
-  S.set(K.data, all);
-  toast('Gelöscht');
-  renderVerlauf(curVField);
+async function deleteEntry(id) {
+  showLoading('Löscht…');
+  try { await db.delete('messungen', id); cache.entries = null; hideLoading(); toast('Gelöscht'); renderVerlauf(curVField); }
+  catch(e) { hideLoading(); toast('Fehler', true); }
 }
 
 // ══ PROGNOSE ══
-function renderPrognose() {
+async function renderPrognose() {
   if (!CLIENT) return;
+  if (!cache.entries) { showLoading('Lädt…'); cache.entries = (await db.get('messungen', { kunde_id: CLIENT.id })).sort((a,b) => a.datum.localeCompare(b.datum)); hideLoading(); }
   const rate = parseInt(document.getElementById('pr-slider').value) / 10;
   document.getElementById('pr-slider-v').textContent = rate.toFixed(1).replace('.', ',') + ' kg';
-  const es = getEntries().filter(e => e.gewicht);
+  const es = cache.entries.filter(e => e.gewicht);
   if (!es.length) return;
-  const last = es[es.length-1], cw = last.gewicht, cd = new Date(last.datum), goal = CLIENT.ziel || 60, mid = Math.round(cw - (cw - goal) * 0.5);
+  const last = es[es.length-1], cw = parseFloat(last.gewicht), cd = new Date(last.datum), goal = CLIENT.ziel_gewicht || 60, mid = Math.round(cw - (cw - goal) * 0.5);
   const wM = cw <= mid ? 0 : Math.ceil((cw-mid)/rate);
   const wG = cw <= goal ? 0 : Math.ceil((cw-goal)/rate);
   document.getElementById('pr-mid').textContent = cw <= mid ? 'Erreicht!' : ff(addW(cd, wM));
   document.getElementById('pr-mids').textContent = cw <= mid ? '' : 'ca. ' + Math.round(wM/4.3) + ' Monate';
   document.getElementById('pr-goal').textContent = cw <= goal ? 'Erreicht!' : ff(addW(cd, wG));
   document.getElementById('pr-goals').textContent = cw <= goal ? '' : 'ca. ' + Math.round(wG/4.3) + ' Monate';
-  const al = es.map(e => fs(new Date(e.datum))), ad = es.map(e => e.gewicht), fl = [], fd2 = [ad[ad.length-1]];
+  const al = es.map(e => fs(new Date(e.datum))), ad = es.map(e => parseFloat(e.gewicht)), fl = [], fd2 = [ad[ad.length-1]];
   for (let w = 2; w <= wG + 2; w += 2) { const pr = Math.max(goal, parseFloat((cw - rate * w).toFixed(1))); fl.push(fs(addW(cd, w))); fd2.push(pr); if (pr <= goal) break; }
   const allL = [...al, ...fl], si = al.length;
   if (charts.p) charts.p.destroy();
-  if (window.Chart) {
-    charts.p = new Chart(document.getElementById('chart-p'), { type:'line', data:{ labels:allL, datasets:[ { data:[...ad,...Array(fl.length).fill(null)], borderColor:CLIENT.color, borderWidth:2.5, pointRadius:4, pointBackgroundColor:CLIENT.color, tension:0.3, fill:false, spanGaps:false }, { data:[...Array(si-1).fill(null),...fd2], borderColor:CLIENT.color, borderDash:[6,4], borderWidth:2, pointRadius:2, tension:0.3, fill:false, spanGaps:false }, { data:allL.map(()=>goal), borderColor:'#e879a0', borderDash:[3,3], borderWidth:1.5, pointRadius:0, fill:false } ] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10},maxTicksLimit:7,autoSkip:true},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+' kg'},grid:{color:'rgba(255,255,255,.04)'}} } } });
-  }
+  if (window.Chart) { charts.p = new Chart(document.getElementById('chart-p'), { type:'line', data:{ labels:allL, datasets:[ { data:[...ad,...Array(fl.length).fill(null)], borderColor:CLIENT.farbe||'#b57bee', borderWidth:2.5, pointRadius:4, pointBackgroundColor:CLIENT.farbe||'#b57bee', tension:0.3, fill:false, spanGaps:false }, { data:[...Array(si-1).fill(null),...fd2], borderColor:CLIENT.farbe||'#b57bee', borderDash:[6,4], borderWidth:2, pointRadius:2, tension:0.3, fill:false, spanGaps:false }, { data:allL.map(()=>goal), borderColor:'#e879a0', borderDash:[3,3], borderWidth:1.5, pointRadius:0, fill:false } ] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#7c7890',font:{size:10},maxTicksLimit:7,autoSkip:true},grid:{color:'rgba(255,255,255,.04)'}}, y:{ticks:{color:'#7c7890',font:{size:10},callback:v=>v+' kg'},grid:{color:'rgba(255,255,255,.04)'}} } } }); }
   const MS = [{kg:Math.round(cw-(cw-goal)*.25),l:'25% geschafft',d:'Erste Veränderungen'},{kg:mid,l:'Halbzeit',d:'Die Hälfte geschafft'},{kg:Math.round(cw-(cw-goal)*.75),l:'75% geschafft',d:'Fast am Ziel!'},{kg:goal,l:'Ziel!',d:''}];
   const CS = ['#b57bee','#e879a0','#fbbf24','#2dd4a0'];
-  document.getElementById('pr-milestones').innerHTML = MS.map((m,i) => {
-    const w = cw<=m.kg?0:Math.ceil((cw-m.kg)/rate), reached = cw<=m.kg;
-    return `<div style="display:flex;gap:12px;margin-bottom:14px">
-      <div style="display:flex;flex-direction:column;align-items:center">
-        <div style="width:11px;height:11px;border-radius:50%;background:${CS[i]}${reached?';outline:3px solid '+CS[i]+';outline-offset:2px':''}"></div>
-        ${i<3?`<div style="width:1.5px;flex:1;background:var(--br);margin-top:4px;min-height:14px"></div>`:''}
-      </div>
-      <div style="padding-bottom:4px">
-        <div style="font-size:13px;font-weight:600;margin-bottom:2px">${m.l}${reached?'<span class="badge">Erreicht</span>':''}</div>
-        <div style="font-size:12px;color:var(--mu)">${reached?'Bereits erreicht!':ff(addW(cd,w))+' · ca. '+Math.round(w/4.3)+' Monate'}<br>${m.d}</div>
-      </div>
-    </div>`;
-  }).join('');
+  document.getElementById('pr-milestones').innerHTML = MS.map((m,i) => { const w=cw<=m.kg?0:Math.ceil((cw-m.kg)/rate),reached=cw<=m.kg; return `<div style="display:flex;gap:12px;margin-bottom:14px"><div style="display:flex;flex-direction:column;align-items:center"><div style="width:11px;height:11px;border-radius:50%;background:${CS[i]}${reached?';outline:3px solid '+CS[i]+';outline-offset:2px':''}"></div>${i<3?`<div style="width:1.5px;flex:1;background:var(--br);margin-top:4px;min-height:14px"></div>`:''}</div><div style="padding-bottom:4px"><div style="font-size:13px;font-weight:600;margin-bottom:2px">${m.l}${reached?'<span class="badge">Erreicht</span>':''}</div><div style="font-size:12px;color:var(--mu)">${reached?'Bereits erreicht!':ff(addW(cd,w))+' · ca. '+Math.round(w/4.3)+' Monate'}<br>${m.d}</div></div></div>`; }).join('');
 }
 
 // ══ CHECK-IN ══
-const calcStreak = () => {
-  if (!CLIENT) return 0;
-  const ci = getCI(), dates = Object.keys(ci).sort().reverse();
+function _calcStreak() {
+  const ci = cache.ci || {}, dates = Object.keys(ci).sort().reverse();
   if (!dates.length) return 0;
   let s = 0; const t = new Date(TODAY);
   for (let i = 0; i < dates.length; i++) { const diff = Math.round((t - new Date(dates[i])) / 86400000); if (diff === i || diff === i+1) s++; else break; }
   return s;
-};
+}
 
 const calcPts = () => {
   let p = 0;
@@ -879,19 +932,13 @@ function showCIStep(n) {
 }
 
 function pickScale(key, val, btn) {
-  const row = btn.closest('.scale-btns');
-  row.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('sel'));
-  btn.classList.add('sel');
-  ciData[key] = val;
+  btn.closest('.scale-btns').querySelectorAll('.scale-btn').forEach(b => b.classList.remove('sel'));
+  btn.classList.add('sel'); ciData[key] = val;
 }
-
 function pickTog(key, val, btn) {
-  const row = btn.closest('.tog-btns');
-  row.querySelectorAll('.tog-btn').forEach(b => { b.classList.remove('yes','no'); });
-  btn.classList.add(val === 'ja' ? 'yes' : 'no');
-  ciData[key] = val;
+  btn.closest('.tog-btns').querySelectorAll('.tog-btn').forEach(b => { b.classList.remove('yes','no'); });
+  btn.classList.add(val === 'ja' ? 'yes' : 'no'); ciData[key] = val;
 }
-
 function ciNext() {
   if (ciStep === 3) { const v = parseFloat(document.getElementById('ci-schlaf').value); if (!isNaN(v)) ciData.schlaf = v; }
   if (ciStep < 7) { ciStep++; if (ciStep === 7) buildCISum(); showCIStep(ciStep); }
@@ -914,22 +961,28 @@ function buildCISum() {
     <div class="sum-item"><div class="sum-em">${ciData.training==='ja'?'💪':'🛋️'}</div><div class="sum-lbl">Training</div><div class="sum-val">${ciData.training==='ja'?'Ja':'Nein'}</div></div>`;
 }
 
-function finishCheckin() {
+async function finishCheckin() {
   if (!CLIENT) return;
   const pts = calcPts();
-  const all = S.get(K.ci, {});
-  if (!all[CLIENT.id]) all[CLIENT.id] = {};
-  all[CLIENT.id][TODAY] = { ...ciData, punkte: pts, ts: Date.now() };
-  S.set(K.ci, all);
-  closeCheckin();
-  toast('Check-in gespeichert! +' + pts + ' Punkte');
-  renderDash();
-  renderCheckinTab();
+  showLoading('Speichert…');
+  try {
+    await db.upsert('checkins', { kunde_id: CLIENT.id, datum: TODAY, stimmung: ciData.stimmung||null, energie: ciData.energie||null, hunger: ciData.hunger||null, schlaf: ciData.schlaf||null, wasser: ciData.wasser||null, training: ciData.training||null, plan: ciData.plan||null, punkte: pts }, 'kunde_id,datum');
+    cache.ci = null;
+    hideLoading(); closeCheckin();
+    toast('Check-in gespeichert! +' + pts + ' Punkte');
+    renderDash(); renderCheckinTab();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
 }
 
-function renderCheckinTab() {
+async function renderCheckinTab() {
   if (!CLIENT) return;
-  const ci = getCI(), streak = calcStreak(), dates = Object.keys(ci).sort().reverse();
+  if (!cache.ci) {
+    showLoading('Lädt…');
+    const ciAll = await db.get('checkins', { kunde_id: CLIENT.id });
+    cache.ci = {}; ciAll.forEach(c => { cache.ci[c.datum] = c; });
+    hideLoading();
+  }
+  const ci = cache.ci, streak = _calcStreak(), dates = Object.keys(ci).sort().reverse();
   document.getElementById('ci-streak-wrap').innerHTML = `<div class="streak"><div class="streak-n">${streak}</div><div><div class="streak-l">Tage Streak</div><div class="streak-s">${dates.length} Check-ins gesamt</div></div><div style="font-size:28px;margin-left:auto">${streak>=7?'🔥':streak>=3?'⚡':'✨'}</div></div>`;
   const tci = ci[TODAY], tel = document.getElementById('ci-today-wrap');
   if (tci) { tel.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:13px;color:var(--mu)">Heute</span><span style="font-size:26px;font-weight:300;color:var(--ac3)">${tci.punkte}<span style="font-size:11px;color:var(--mu)"> Pkt</span></span></div><div style="font-size:12px;color:var(--mu)">${tci.training==='ja'?'💪 Trainiert  ':''}${tci.plan==='ja'?'✅ Plan  ':''}${tci.wasser==='ja'?'💧 Wasser':''}</div>`; document.querySelector('#pg-checkin .card .btn').textContent = 'Erneut ausfüllen'; }
@@ -952,20 +1005,12 @@ function switchMealCat(cat, btn) {
   renderMealTab();
 }
 
-function openAddMeal(editIdx) {
-  document.getElementById('mc-edit-idx').value = editIdx !== undefined ? editIdx : '';
-  document.getElementById('m-meal-title').textContent = editIdx !== undefined ? 'Mahlzeit bearbeiten' : 'Mahlzeit hinzufügen';
-  if (editIdx !== undefined) {
-    const meals = getMeals();
-    const m = meals[editIdx];
-    document.getElementById('mc-cat').value = m.cat;
-    document.getElementById('mc-name').value = m.name;
-    document.getElementById('mc-ing').value = m.ing || '';
-    document.getElementById('mc-kcal').value = m.kcal || '';
-    document.getElementById('mc-p').value = m.p || '';
-    document.getElementById('mc-f').value = m.f || '';
-    document.getElementById('mc-c').value = m.c || '';
-    document.getElementById('mc-opt').value = m.opt || '';
+function openAddMeal(editId) {
+  document.getElementById('mc-edit-idx').value = editId || '';
+  document.getElementById('m-meal-title').textContent = editId ? 'Mahlzeit bearbeiten' : 'Mahlzeit hinzufügen';
+  if (editId && cache.meals) {
+    const m = cache.meals.find(x => x.id === editId);
+    if (m) { document.getElementById('mc-cat').value = m.kategorie; document.getElementById('mc-name').value = m.name; document.getElementById('mc-ing').value = m.zutaten||''; document.getElementById('mc-kcal').value = m.kalorien||''; document.getElementById('mc-p').value = m.protein||''; document.getElementById('mc-f').value = m.fett||''; document.getElementById('mc-c').value = m.kohlenhydrate||''; document.getElementById('mc-opt').value = m.option_nr||''; }
   } else {
     document.getElementById('mc-cat').value = currentMealCat;
     ['mc-name','mc-ing','mc-kcal','mc-p','mc-f','mc-c','mc-opt'].forEach(id => document.getElementById(id).value = '');
@@ -973,14 +1018,13 @@ function openAddMeal(editIdx) {
   openModal('m-addmeal');
 }
 
-function renderMealTab() {
+async function renderMealTab() {
   if (!CLIENT) return;
-  const meals = getMeals();
-
-  // Summary card
+  if (!cache.meals) { showLoading('Lädt…'); cache.meals = await db.get('mahlzeiten', { kunde_id: CLIENT.id }); hideLoading(); }
+  const meals = cache.meals;
   const catTotals = { fruehstueck:0, lunch:0, snack:0, abendessen:0 };
   const catLabels = { fruehstueck:'Frühstück', lunch:'Lunch', snack:'Snack', abendessen:'Abendessen' };
-  meals.forEach(m => { if (m.kcal && catTotals[m.cat] !== undefined) catTotals[m.cat] += m.kcal; });
+  meals.forEach(m => { if (m.kalorien && catTotals[m.kategorie] !== undefined) catTotals[m.kategorie] += m.kalorien; });
   const totalKcal = Object.values(catTotals).reduce((a,b) => a+b, 0);
   document.getElementById('meal-summary').innerHTML = totalKcal > 0 ? `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -988,163 +1032,118 @@ function renderMealTab() {
       <div style="font-size:11px;color:var(--mu)">${meals.length} Optionen gesamt</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      ${Object.entries(catTotals).map(([cat, kcal]) => `
-        <div style="background:var(--card2);border-radius:10px;padding:10px 12px">
-          <div style="font-size:10px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:3px">${catLabels[cat]}</div>
-          <div style="font-size:16px;font-weight:300">${kcal > 0 ? kcal + ' kcal' : '–'}</div>
-          <div style="font-size:10px;color:var(--mu)">${meals.filter(m=>m.cat===cat).length} Option${meals.filter(m=>m.cat===cat).length!==1?'en':''}</div>
-        </div>`).join('')}
+      ${Object.entries(catTotals).map(([cat, kcal]) => `<div style="background:var(--card2);border-radius:10px;padding:10px 12px"><div style="font-size:10px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:3px">${catLabels[cat]}</div><div style="font-size:16px;font-weight:300">${kcal>0?kcal+' kcal':'–'}</div><div style="font-size:10px;color:var(--mu)">${meals.filter(m=>m.kategorie===cat).length} Option${meals.filter(m=>m.kategorie===cat).length!==1?'en':''}</div></div>`).join('')}
     </div>` : '<div class="empty" style="padding:12px">Noch keine Mahlzeiten eingetragen</div>';
 
-  // Filtered meals for current category
-  const filtered = meals.map((m, i) => ({...m, idx:i})).filter(m => m.cat === currentMealCat);
-  if (!filtered.length) {
-    document.getElementById('meal-list').innerHTML = `<div class="empty">Noch keine ${catLabels[currentMealCat]}-Optionen<br><br><button class="btn" onclick="openAddMeal()" style="width:auto;padding:10px 20px">+ Erste Option hinzufügen</button></div>`;
-    return;
-  }
-
+  const filtered = meals.filter(m => m.kategorie === currentMealCat);
+  if (!filtered.length) { document.getElementById('meal-list').innerHTML = `<div class="empty">Noch keine ${catLabels[currentMealCat]}-Optionen<br><br><button class="btn" onclick="openAddMeal()" style="width:auto;padding:10px 20px">+ Erste Option hinzufügen</button></div>`; return; }
   document.getElementById('meal-list').innerHTML = filtered.map((m, i) => `
     <div class="plan-item">
       <div class="plan-item-head">
         <div>
-          <div style="font-size:10px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:3px">Option ${m.opt || i+1}</div>
+          <div style="font-size:10px;color:var(--mu);font-weight:700;text-transform:uppercase;margin-bottom:3px">Option ${m.option_nr||i+1}</div>
           <div class="plan-item-name">${m.name}</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
-          <button class="del-btn" style="font-size:16px;color:var(--ac)" onclick="openAddMeal(${m.idx})">✏️</button>
-          <button class="del-btn" onclick="confirmDelete('${m.name} löschen?', ()=>deleteMeal(${m.idx}))">×</button>
+          <button class="del-btn" style="font-size:16px;color:var(--ac)" onclick="openAddMeal('${m.id}')">✏️</button>
+          <button class="del-btn" onclick="confirmDelete('${m.name} löschen?', ()=>deleteMeal('${m.id}'))">×</button>
         </div>
       </div>
-      ${m.ing ? `<div class="plan-item-body">${m.ing.replace(/\n/g,'<br>')}</div>` : ''}
+      ${m.zutaten?`<div class="plan-item-body">${m.zutaten.replace(/\n/g,'<br>')}</div>`:''}
       <div class="pills">
-        ${m.kcal ? `<span class="pill pk">${m.kcal} kcal</span>` : ''}
-        ${m.p ? `<span class="pill pp">${m.p}g P</span>` : ''}
-        ${m.f ? `<span class="pill pf">${m.f}g F</span>` : ''}
-        ${m.c ? `<span class="pill pc">${m.c}g KH</span>` : ''}
+        ${m.kalorien?`<span class="pill pk">${m.kalorien} kcal</span>`:''}
+        ${m.protein?`<span class="pill pp">${m.protein}g P</span>`:''}
+        ${m.fett?`<span class="pill pf">${m.fett}g F</span>`:''}
+        ${m.kohlenhydrate?`<span class="pill pc">${m.kohlenhydrate}g KH</span>`:''}
       </div>
     </div>`).join('');
 }
 
-function doSaveMeal() {
+async function doSaveMeal() {
   if (!CLIENT) return;
   const name = document.getElementById('mc-name').value.trim();
   if (!name) { toast('Name eingeben', true); return; }
   const kcal = parseInt(document.getElementById('mc-kcal').value);
   if (!kcal) { toast('Bitte Kalorien eingeben', true); return; }
-  const meal = {
-    cat: document.getElementById('mc-cat').value,
-    name,
-    ing: document.getElementById('mc-ing').value.trim(),
-    kcal,
-    p: parseInt(document.getElementById('mc-p').value) || null,
-    f: parseInt(document.getElementById('mc-f').value) || null,
-    c: parseInt(document.getElementById('mc-c').value) || null,
-    opt: parseInt(document.getElementById('mc-opt').value) || null
-  };
-  const all = S.get(K.meals, {});
-  if (!all[CLIENT.id]) all[CLIENT.id] = [];
-  const editIdx = document.getElementById('mc-edit-idx').value;
-  if (editIdx !== '') {
-    all[CLIENT.id][parseInt(editIdx)] = meal;
-    toast('Mahlzeit aktualisiert!');
-  } else {
-    all[CLIENT.id].push(meal);
-    toast('Mahlzeit gespeichert!');
-  }
-  S.set(K.meals, all);
-  closeModal('m-addmeal');
-  renderMealTab();
+  const meal = { kunde_id: CLIENT.id, kategorie: document.getElementById('mc-cat').value, name, zutaten: document.getElementById('mc-ing').value.trim(), kalorien: kcal, protein: parseInt(document.getElementById('mc-p').value)||null, fett: parseInt(document.getElementById('mc-f').value)||null, kohlenhydrate: parseInt(document.getElementById('mc-c').value)||null, option_nr: parseInt(document.getElementById('mc-opt').value)||null };
+  showLoading('Speichert…');
+  try {
+    const editId = document.getElementById('mc-edit-idx').value;
+    if (editId) { await db.update('mahlzeiten', editId, meal); toast('Aktualisiert!'); }
+    else { await db.insert('mahlzeiten', meal); toast('Gespeichert!'); }
+    cache.meals = null; hideLoading(); closeModal('m-addmeal'); renderMealTab();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
 }
 
-function deleteMeal(idx) {
-  const all = S.get(K.meals, {}); const ms = all[CLIENT.id]||[]; ms.splice(idx, 1); all[CLIENT.id] = ms; S.set(K.meals, all); toast('Gelöscht'); renderMealTab();
+async function deleteMeal(id) {
+  showLoading('Löscht…');
+  try { await db.delete('mahlzeiten', id); cache.meals = null; hideLoading(); toast('Gelöscht'); renderMealTab(); }
+  catch(e) { hideLoading(); toast('Fehler', true); }
 }
 
 // ══ TRAINING ══
-function renderTrainTab() {
+async function renderTrainTab() {
   if (!CLIENT) return;
-  const tr = getTrain();
-
-  // Note section
+  if (!cache.exercises) {
+    showLoading('Lädt…');
+    const [exs, notes] = await Promise.all([ db.get('uebungen', { kunde_id: CLIENT.id }), db.get('trainingsnotiz', { kunde_id: CLIENT.id }) ]);
+    cache.exercises = exs; cache.train = notes[0] || null;
+    hideLoading();
+  }
   const noteEl = document.getElementById('train-note-text');
-  if (tr.planText) {
-    noteEl.textContent = tr.planText;
-    noteEl.style.display = 'block';
-  } else {
-    noteEl.textContent = '';
-    noteEl.style.display = 'none';
-  }
+  if (cache.train?.notiz) { noteEl.textContent = cache.train.notiz; noteEl.style.display = 'block'; }
+  else { noteEl.textContent = ''; noteEl.style.display = 'none'; }
 
-  // Exercises
   const exList = document.getElementById('exercise-list');
-  if (!tr.exercises || !tr.exercises.length) {
-    exList.innerHTML = '<div class="empty">Noch keine Übungen — füge die erste hinzu!</div>';
-    return;
-  }
+  if (!cache.exercises?.length) { exList.innerHTML = '<div class="empty">Noch keine Übungen — füge die erste hinzu!</div>'; return; }
   const grouped = {};
-  tr.exercises.forEach((ex, i) => {
-    const day = ex.day || 'Allgemein';
-    if (!grouped[day]) grouped[day] = [];
-    grouped[day].push({...ex, idx:i});
-  });
+  cache.exercises.forEach(ex => { const day = ex.trainingstag||'Allgemein'; if (!grouped[day]) grouped[day]=[]; grouped[day].push(ex); });
   exList.innerHTML = Object.entries(grouped).map(([day, exs]) => `
     <div class="train-day">
       <div class="train-day-head" onclick="this.nextElementSibling.classList.toggle('open')">
-        <div>
-          <div class="train-day-title">${day}</div>
-          <div class="train-day-count">${exs.length} Übung${exs.length!==1?'en':''}</div>
-        </div>
+        <div><div class="train-day-title">${day}</div><div class="train-day-count">${exs.length} Übung${exs.length!==1?'en':''}</div></div>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       </div>
       <div class="train-day-body">
-        ${exs.map(ex => `
-          <div class="exercise">
-            <div class="ex-head">
-              <div class="ex-name">${ex.name}</div>
-              <button class="del-btn" onclick="confirmDelete('${ex.name} löschen?',()=>deleteExercise(${ex.idx}))">×</button>
-            </div>
-            <div class="ex-detail">
-              ${ex.sets ? `<strong>${ex.sets} Sätze</strong>` : ''}
-              ${ex.reps ? ` × ${ex.reps} Wdh.` : ''}
-              ${ex.weight ? ` · ${ex.weight}` : ''}
-            </div>
-          </div>`).join('')}
+        ${exs.map(ex => `<div class="exercise"><div class="ex-head"><div class="ex-name">${ex.name}</div><button class="del-btn" onclick="confirmDelete('${ex.name} löschen?',()=>deleteExercise('${ex.id}'))">×</button></div><div class="ex-detail">${ex.saetze?`<strong>${ex.saetze} Sätze</strong>`:''} ${ex.wiederholungen?'× '+ex.wiederholungen+' Wdh.':''} ${ex.gewicht?'· '+ex.gewicht:''}</div></div>`).join('')}
       </div>
     </div>`).join('');
 }
 
-function doSaveExercise() {
-  if (!CLIENT) return;
-  const name = document.getElementById('ex-name').value.trim();
-  if (!name) { toast('Übungsname eingeben', true); return; }
-  const ex = { day:document.getElementById('ex-day').value.trim()||'Allgemein', name, sets:parseInt(document.getElementById('ex-sets').value)||null, reps:document.getElementById('ex-reps').value.trim(), weight:document.getElementById('ex-weight').value.trim() };
-  const all = S.get(K.train, {}); if(!all[CLIENT.id])all[CLIENT.id]={exercises:[],planText:''};
-  all[CLIENT.id].exercises.push(ex); S.set(K.train, all);
-  closeModal('m-addex');
-  ['ex-day','ex-name','ex-sets','ex-reps','ex-weight'].forEach(id=>document.getElementById(id).value='');
-  toast('Übung gespeichert!'); renderTrainTab();
-}
-
-function deleteExercise(idx) {
-  const all = S.get(K.train, {}); const tr = all[CLIENT.id]||{exercises:[],planText:''}; tr.exercises.splice(idx,1); all[CLIENT.id]=tr; S.set(K.train,all); toast('Gelöscht'); renderTrainTab();
-}
-
 function openTrainNote() {
-  const tr = getTrain();
-  document.getElementById('train-note-input').value = tr.planText || '';
+  document.getElementById('train-note-input').value = cache.train?.notiz || '';
   openModal('m-train-note');
 }
 
-function doSaveTrainNote() {
+async function doSaveTrainNote() {
   if (!CLIENT) return;
   const text = document.getElementById('train-note-input').value.trim();
-  const all = S.get(K.train, {});
-  if (!all[CLIENT.id]) all[CLIENT.id] = { exercises: [], planText: '' };
-  all[CLIENT.id].planText = text;
-  S.set(K.train, all);
-  closeModal('m-train-note');
-  toast('Notiz gespeichert!');
-  renderTrainTab();
+  showLoading('Speichert…');
+  try {
+    await db.upsert('trainingsnotiz', { kunde_id: CLIENT.id, notiz: text, aktualisiert_am: new Date().toISOString() }, 'kunde_id');
+    cache.train = { notiz: text }; cache.exercises = null;
+    hideLoading(); closeModal('m-train-note'); toast('Notiz gespeichert!'); renderTrainTab();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
+}
+
+async function doSaveExercise() {
+  if (!CLIENT) return;
+  const name = document.getElementById('ex-name').value.trim();
+  if (!name) { toast('Übungsname eingeben', true); return; }
+  const ex = { kunde_id: CLIENT.id, trainingstag: document.getElementById('ex-day').value.trim()||'Allgemein', name, saetze: parseInt(document.getElementById('ex-sets').value)||null, wiederholungen: document.getElementById('ex-reps').value.trim()||null, gewicht: document.getElementById('ex-weight').value.trim()||null };
+  showLoading('Speichert…');
+  try {
+    await db.insert('uebungen', ex);
+    cache.exercises = null; hideLoading(); closeModal('m-addex');
+    ['ex-day','ex-name','ex-sets','ex-reps','ex-weight'].forEach(id => document.getElementById(id).value = '');
+    toast('Übung gespeichert!'); renderTrainTab();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
+}
+
+async function deleteExercise(id) {
+  showLoading('Löscht…');
+  try { await db.delete('uebungen', id); cache.exercises = null; hideLoading(); toast('Gelöscht'); renderTrainTab(); }
+  catch(e) { hideLoading(); toast('Fehler', true); }
 }
 
 // ══ CONFIRM DELETE ══
@@ -1158,11 +1157,8 @@ function confirmDelete(msg, fn) {
 
 // ══ INIT ══
 document.getElementById('e-datum').value = TODAY;
-
-// Load Chart.js and PDF.js
 const loadScript = src => new Promise(res => { const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=res;document.head.appendChild(s); });
 loadScript('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js');
-
 renderHome();
 </script>
 </body>
