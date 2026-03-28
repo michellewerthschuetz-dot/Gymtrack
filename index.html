@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="GymTrack">
 <title>GymTrack</title>
@@ -12,13 +12,13 @@
 body{background:var(--bg);color:var(--tx);font-family:system-ui,sans-serif;font-size:15px;min-height:100vh;-webkit-font-smoothing:antialiased}
 
 /* NAV */
-nav{position:fixed;bottom:0;left:0;right:0;background:#0a090e;border-top:1px solid var(--br);display:flex;z-index:50;padding-bottom:env(safe-area-inset-bottom)}
-nav button{flex:1;background:none;border:none;color:var(--mu);padding:10px 4px 8px;font-size:10px;font-weight:500;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;transition:color .15s}
+nav{position:fixed;bottom:0;left:0;right:0;background:#0a090e;border-top:1px solid var(--br);display:flex;z-index:50;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+nav button{flex:1;background:none;border:none;color:var(--mu);padding:10px 4px 6px;font-size:10px;font-weight:500;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;transition:color .15s}
 nav button.on{color:var(--ac)}
 nav button svg{width:22px;height:22px;stroke-width:1.8}
 
 /* PAGES */
-.page{display:none;padding:16px 16px 90px;max-width:600px;margin:0 auto}
+.page{display:none;padding:16px 16px 110px;max-width:600px;margin:0 auto}
 .page.on{display:block}
 
 /* HEADER */
@@ -292,7 +292,6 @@ h1{font-size:26px;font-weight:700;margin-bottom:4px;background:linear-gradient(1
   <p class="sub">Wähle dein Profil</p>
   <div id="client-list"></div>
   <button class="btn" onclick="openModal('m-addclient')">+ Ich bin neu hier</button>
-  <button class="btn btn-outline" onclick="openModal('m-addclient')">+ Neuen Kunden anlegen</button>
 </div>
 
 <!-- PAGE: ÜBERSICHT -->
@@ -667,13 +666,14 @@ async function renderHome() {
     const el = document.getElementById('client-list');
     if (!cs.length) { el.innerHTML = '<div class="empty">Noch keine Profile — leg das erste an!</div>'; return; }
     el.innerHTML = cs.map(c => `
-      <div class="client-card" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})">
-        <div class="avatar" style="background:${c.farbe||'#b57bee'}">${c.name[0].toUpperCase()}</div>
-        <div>
+      <div class="client-card">
+        <div class="avatar" style="background:${c.farbe||'#b57bee'};flex-shrink:0">${c.name[0].toUpperCase()}</div>
+        <div style="flex:1;cursor:pointer" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})">
           <div class="client-name">${c.name}</div>
           <div class="client-meta">Ziel: ${c.ziel_gewicht||'–'} kg${c.start_gewicht?' · Start: '+c.start_gewicht+' kg':''}</div>
         </div>
-        <svg style="margin-left:auto;flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        <button onclick="confirmDeleteClient('${c.id}','${c.name}')" style="background:none;border:none;cursor:pointer;padding:8px;color:var(--mu);font-size:20px;flex-shrink:0" title="Löschen">🗑️</button>
+        <svg style="flex-shrink:0;cursor:pointer" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </div>`).join('');
   } catch(e) { hideLoading(); toast('Verbindungsfehler: ' + e.message, true); }
 }
@@ -1144,6 +1144,21 @@ async function deleteExercise(id) {
   showLoading('Löscht…');
   try { await db.delete('uebungen', id); cache.exercises = null; hideLoading(); toast('Gelöscht'); renderTrainTab(); }
   catch(e) { hideLoading(); toast('Fehler', true); }
+}
+
+function confirmDeleteClient(id, name) {
+  document.getElementById('m-confirm-title').textContent = 'Kunden löschen?';
+  document.getElementById('m-confirm-sub').textContent = name + ' und ALLE Daten (Messungen, Check-ins, Mahlzeiten, Übungen) werden dauerhaft gelöscht. Das kann nicht rückgängig gemacht werden.';
+  document.getElementById('m-confirm-yes').onclick = async () => {
+    closeModal('m-confirm');
+    showLoading('Wird gelöscht…');
+    try {
+      await db.delete('kunden', id);
+      hideLoading(); toast(name + ' gelöscht');
+      renderHome();
+    } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
+  };
+  openModal('m-confirm');
 }
 
 // ══ CONFIRM DELETE ══
