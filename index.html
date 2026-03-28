@@ -200,6 +200,18 @@ h1{font-size:26px;font-weight:700;margin-bottom:4px;background:linear-gradient(1
   </div>
 </div>
 
+<div class="modal-bg" id="m-editclient" onclick="if(event.target===this)closeModal('m-editclient')">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="edit-client-title">Profil bearbeiten</div>
+    <input type="hidden" id="ec-id">
+    <div class="form-group"><label>Zielgewicht (kg)</label><input type="number" id="ec-ziel" placeholder="z.B. 55" inputmode="decimal"></div>
+    <div class="form-group"><label>Startgewicht (kg)</label><input type="number" id="ec-start" placeholder="z.B. 65" inputmode="decimal"></div>
+    <button class="btn" onclick="doEditClient()">Speichern</button>
+    <button class="btn btn-outline" onclick="closeModal('m-editclient')">Abbrechen</button>
+  </div>
+</div>
+
 <div class="modal-bg" id="m-addmeal">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -652,12 +664,12 @@ async function renderHome() {
     if (!cs.length) { el.innerHTML = '<div class="empty">Noch keine Profile — leg das erste an!</div>'; return; }
     el.innerHTML = cs.map(c => `
       <div class="client-card">
-        <div class="avatar" style="background:${c.farbe||'#b57bee'};flex-shrink:0">${c.name[0].toUpperCase()}</div>
         <div style="flex:1;cursor:pointer" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})">
           <div class="client-name">${c.name}</div>
           <div class="client-meta">Ziel: ${c.ziel_gewicht||'–'} kg${c.start_gewicht?' · Start: '+c.start_gewicht+' kg':''}</div>
         </div>
-        <button onclick="confirmDeleteClient('${c.id}','${c.name}')" style="background:none;border:none;cursor:pointer;padding:8px;color:var(--mu);font-size:20px;flex-shrink:0" title="Löschen">🗑️</button>
+        <button onclick="openEditClient(${JSON.stringify(c).replace(/"/g,'&quot;')})" style="background:none;border:none;cursor:pointer;padding:8px;color:var(--mu);font-size:16px;flex-shrink:0" title="Ziel anpassen">✏️</button>
+        <button onclick="confirmDeleteClient('${c.id}','${c.name}')" style="background:none;border:none;cursor:pointer;padding:8px;color:var(--mu);font-size:18px;flex-shrink:0" title="Löschen">🗑️</button>
         <svg style="flex-shrink:0;cursor:pointer" onclick="selectClient(${JSON.stringify(c).replace(/"/g,'&quot;')})" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </div>`).join('');
   } catch(e) { hideLoading(); toast('Verbindungsfehler: ' + e.message, true); }
@@ -691,6 +703,41 @@ function selectClient(c) {
   document.getElementById('pg-home').classList.remove('on');
   document.getElementById('main-nav').style.display = 'flex';
   goTab('dash', document.getElementById('nb-dash'));
+  // Show check-in popup - load today's CI status first
+  setTimeout(async () => {
+    const ciAll = await db.get('checkins', { kunde_id: CLIENT.id });
+    cache.ci = {};
+    ciAll.forEach(c => { cache.ci[c.datum] = c; });
+    if (!cache.ci[TODAY]) startCheckin();
+  }, 700);
+}
+
+function openEditClient(c) {
+  const client = typeof c === 'string' ? JSON.parse(c) : c;
+  document.getElementById('edit-client-title').textContent = client.name + ' — Ziel anpassen';
+  document.getElementById('ec-id').value = client.id;
+  document.getElementById('ec-ziel').value = client.ziel_gewicht || '';
+  document.getElementById('ec-start').value = client.start_gewicht || '';
+  openModal('m-editclient');
+}
+
+async function doEditClient() {
+  const id = document.getElementById('ec-id').value;
+  const ziel = parseFloat(document.getElementById('ec-ziel').value) || null;
+  const start = parseFloat(document.getElementById('ec-start').value) || null;
+  showLoading('Speichert…');
+  try {
+    await db.update('kunden', id, { ziel_gewicht: ziel, start_gewicht: start });
+    hideLoading();
+    closeModal('m-editclient');
+    toast('Ziel aktualisiert!');
+    // Update CLIENT if currently selected
+    if (CLIENT && CLIENT.id === id) {
+      CLIENT.ziel_gewicht = ziel;
+      CLIENT.start_gewicht = start;
+    }
+    renderHome();
+  } catch(e) { hideLoading(); toast('Fehler: ' + e.message, true); }
 }
 
 function goHome() {
