@@ -641,8 +641,16 @@ const fs = d => d.toLocaleDateString('de-DE', { month:'short', year:'numeric' })
 const addW = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n * 7); return x; };
 const r1 = v => Math.round(v * 10) / 10;
 
-function showLoading(msg) { document.getElementById('toast').textContent = msg || 'Lädt…'; document.getElementById('toast').className = ''; document.getElementById('toast').classList.add('on'); }
-function hideLoading() { document.getElementById('toast').classList.remove('on'); }
+function showLoading(msg) {
+  // Use a subtle top bar instead of toast so it doesn't get stuck
+  let bar = document.getElementById('load-bar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'load-bar'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--ac),var(--ac2));z-index:999;animation:loadbar 1s ease-in-out infinite alternate'; document.body.appendChild(bar); const style = document.createElement('style'); style.textContent = '@keyframes loadbar{from{opacity:1}to{opacity:0.4}}'; document.head.appendChild(style); }
+  bar.style.display = 'block';
+}
+function hideLoading() {
+  const bar = document.getElementById('load-bar');
+  if (bar) bar.style.display = 'none';
+}
 
 function toast(msg, err) {
   const t = document.getElementById('toast');
@@ -1085,10 +1093,17 @@ async function deleteMeal(id) {
 async function renderTrainTab() {
   if (!CLIENT) return;
   if (!cache.exercises) {
-    showLoading('Lädt…');
-    const [exs, notes] = await Promise.all([ db.get('uebungen', { kunde_id: CLIENT.id }), db.get('trainingsnotiz', { kunde_id: CLIENT.id }) ]);
-    cache.exercises = exs; cache.train = notes[0] || null;
-    hideLoading();
+    document.getElementById('exercise-list').innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:16px;color:var(--mu);font-size:13px"><div style="width:16px;height:16px;border:2px solid var(--br);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0"></div>Lädt…</div>';
+    try {
+      const [exs, notes] = await Promise.all([
+        db.get('uebungen', { kunde_id: CLIENT.id }),
+        db.get('trainingsnotiz', { kunde_id: CLIENT.id })
+      ]);
+      cache.exercises = exs; cache.train = notes[0] || null;
+    } catch(e) {
+      document.getElementById('exercise-list').innerHTML = '<div class="empty">Fehler beim Laden</div>';
+      return;
+    }
   }
   const noteEl = document.getElementById('train-note-text');
   if (cache.train?.notiz) { noteEl.textContent = cache.train.notiz; noteEl.style.display = 'block'; }
