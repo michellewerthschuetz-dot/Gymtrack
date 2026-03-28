@@ -1099,10 +1099,11 @@ async function renderTrainTab() {
         db.get('uebungen', { kunde_id: CLIENT.id }),
         db.get('trainingsnotiz', { kunde_id: CLIENT.id })
       ]);
-      cache.exercises = exs; cache.train = notes[0] || null;
+      cache.exercises = exs || [];
+      cache.train = notes?.[0] || null;
     } catch(e) {
-      document.getElementById('exercise-list').innerHTML = '<div class="empty">Fehler beim Laden</div>';
-      return;
+      cache.exercises = [];
+      cache.train = null;
     }
   }
   const noteEl = document.getElementById('train-note-text');
