@@ -520,25 +520,6 @@ h1{font-size:26px;font-weight:700;margin-bottom:4px;background:linear-gradient(1
 </div>
 
 <!-- PAGE: TRAINING -->
-<div class="page" id="pg-training">
-  <h1>Trainingsplan</h1>
-  <p class="sub">Individuell pro Kunde</p>
-
-  <div class="card">
-    <div class="card-title">Notizen / Beschreibung</div>
-    <div id="train-note-wrap">
-      <div id="train-note-text" style="font-size:13px;color:var(--mu);line-height:1.7;white-space:pre-wrap;margin-bottom:10px"></div>
-      <button class="btn btn-outline" onclick="openTrainNote()">✏️ Notiz bearbeiten</button>
-    </div>
-  </div>
-
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <div style="font-size:13px;font-weight:600">Übungen</div>
-    <button class="btn btn-add btn-sm" onclick="openModal('m-addex')" style="width:auto;padding:8px 14px;margin:0">+ Übung hinzufügen</button>
-  </div>
-  <div id="exercise-list"><div class="empty">Noch keine Übungen — füge die erste hinzu!</div></div>
-</div>
-
 <!-- BOTTOM NAV -->
 <nav id="main-nav" style="display:none">
   <button onclick="goTab('dash',this)" class="on" id="nb-dash">
@@ -560,10 +541,6 @@ h1{font-size:26px;font-weight:700;margin-bottom:4px;background:linear-gradient(1
   <button onclick="goTab('ernaehrung',this)" id="nb-ernaehrung">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
     Ernährung
-  </button>
-  <button onclick="goTab('training',this)" id="nb-training">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 4v16M18 4v16M2 8h4M18 8h4M2 16h4M18 16h4M6 12h12"/></svg>
-    Training
   </button>
 </nav>
 
@@ -735,7 +712,6 @@ function goTab(tab, btn) {
   if (tab === 'prognose') renderPrognose();
   if (tab === 'checkin') renderCheckinTab();
   if (tab === 'ernaehrung') renderMealTab();
-  if (tab === 'training') renderTrainTab();
   window.scrollTo(0, 0);
 }
 
